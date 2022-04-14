@@ -24,7 +24,7 @@ def rollingMean(spectrum, N):
 	return rolling_spectrum.mean().to_numpy()[:, 0]
 	
 def gaussian(x, cont, A, sigma, x0):
-	result = cont + A * np.exp(-(x - x0)**2 / (2 * sigma**2))
+	result = cont + A * np.exp(-(x - x0)**2 / (2 * sigma**2)) / (sigma * np.sqrt(2 * np.pi))
 	return result
 gaussian_model = Model(gaussian)
 
@@ -112,7 +112,7 @@ title = 'best fit results: mu = %.2f' % (mu)
 plt.title(title)
 plt.show()
 
-# Индивидуальные линии
+# водородные линии
 
 alphaBegin = 734
 alphaEnd = 765
@@ -120,89 +120,80 @@ alphaEnd = 765
 betaBegin = 2318
 betaEnd = 2335
 
-# OIII линии
-'''
-alphaBegin = 2209
-alphaEnd = 2247
+# металлические линии
 
-betaBegin = 2258
-betaEnd = 2282
-'''
+OIIIBegin = 2209
+OIIIEnd = 2247
 
-HalphaLambda = lambdas[alphaBegin:alphaEnd]
-HbetaLambda = lambdas[betaBegin:betaEnd]
+OIBegin = 1015
+OIEnd = 1035
 
-Halpha1 = spectrumMean1[alphaBegin:alphaEnd]
-Hbeta1 = spectrumMean1[betaBegin:betaEnd]
+NIIBegin = 705
+NIIEnd = 727
 
-Halpha2 = spectrumMean2[alphaBegin:alphaEnd]
-Hbeta2 = spectrumMean2[betaBegin:betaEnd]
+SII1Begin = 602
+SII1End = 613
 
-initialCont = 10
-initialSigma = 1
+SII2Begin = 575
+SII2End = 593
 
-result_alpha1 = gaussian_model.fit(Halpha1, x = HalphaLambda, cont = initialCont, A = (np.max(Halpha1) - initialCont), sigma = initialSigma, x0 = lambdas[int(alphaBegin / 2 + alphaEnd / 2)])
-alpha1Cont = result_alpha1.params['cont'].value
-alpha1A = result_alpha1.params['A'].value
-alpha1Sigma = result_alpha1.params['sigma'].value
-alpha1X0= result_alpha1.params['x0'].value
-print(result_alpha1.fit_report())
+def fitGalaxies(lambdas, spectrum1, spectrum2, lineBegin,lineEnd, lineName):
+	lambdaInterval = lambdas[lineBegin: lineEnd]
+	spectrum1Interval = spectrum1[lineBegin: lineEnd]
+	spectrum2Interval = spectrum2[lineBegin: lineEnd]
+	
+	initialCont = 10
+	initialSigma = 1
+	
+	result_galaxy1 = gaussian_model.fit(spectrum1Interval, x = lambdaInterval, cont = initialCont, A = (np.max(spectrum1Interval) - initialCont * 3) / 2, sigma = initialSigma, x0 = lambdas[int(lineBegin / 2 + lineEnd / 2)])
+	galaxy1Cont = result_galaxy1.params['cont'].value
+	galaxy1A = result_galaxy1.params['A'].value
+	galaxy1Sigma = result_galaxy1.params['sigma'].value
+	galaxy1X0= result_galaxy1.params['x0'].value
+	
+	result_galaxy2 = gaussian_model.fit(spectrum2Interval, x = lambdaInterval, cont = initialCont, A = (np.max(spectrum2Interval) - initialCont), sigma = initialSigma, x0 = lambdas[int(lineBegin / 2 + lineEnd / 2)])
+	galaxy2Cont = result_galaxy2.params['cont'].value
+	galaxy2A = result_galaxy2.params['A'].value
+	galaxy2Sigma = result_galaxy2.params['sigma'].value
+	galaxy2X0= result_galaxy2.params['x0'].value
+	
+	lambdaBest = np.linspace(lambdas[lineBegin], lambdas[lineEnd], 100)
+	fig, axes = plt.subplots(1, 2)
+	
+	axes[0].plot(lambdaInterval, spectrum1Interval, label = lineName + ' galaxy 1')
+	axes[0].plot(lambdaBest, gaussian(lambdaBest, galaxy1Cont, galaxy1A, galaxy1Sigma, galaxy1X0), 'k--', label = 'best fit')
+	axes[0].set_xlabel(r'$\lambda, A$')
+	axes[0].set_ylabel('Intensity')
+	axes[0].grid()
+	axes[0].legend()
 
-result_alpha2 = gaussian_model.fit(Halpha2, x = HalphaLambda, cont = initialCont, A = (np.max(Halpha2) - initialCont), sigma = initialSigma, x0 = lambdas[int(alphaBegin / 2 + alphaEnd / 2)])
-alpha2Cont = result_alpha2.params['cont'].value
-alpha2A = result_alpha2.params['A'].value
-alpha2Sigma = result_alpha2.params['sigma'].value
-alpha2X0= result_alpha2.params['x0'].value
-print(result_alpha2.fit_report())
+	axes[1].plot(lambdaInterval, spectrum2Interval, label = lineName + ' galaxy 2')
+	axes[1].plot(lambdaBest, gaussian(lambdaBest, galaxy2Cont, galaxy2A, galaxy2Sigma, galaxy2X0), 'k--', label = 'best fit')
+	axes[1].set_xlabel(r'$\lambda, A$')
+	axes[1].set_ylabel('Intensity')
+	axes[1].grid()
+	axes[1].legend()
+	
+	plt.show()
+	
+	return galaxy1A, galaxy2A
 
-result_beta1 = gaussian_model.fit(Hbeta1, x = HbetaLambda, cont = initialCont, A = (np.max(Hbeta1) - initialCont), sigma = initialSigma, x0 = lambdas[int(betaBegin / 2 + betaEnd / 2)])
-beta1Cont = result_beta1.params['cont'].value
-beta1A = result_beta1.params['A'].value
-beta1Sigma = result_beta1.params['sigma'].value
-beta1X0= result_beta1.params['x0'].value
-print(result_beta1.fit_report())
+alpha1, alpha2 = fitGalaxies(lambdas, spectrumMean1, spectrumMean2, alphaBegin, alphaEnd, r'$H_{\alpha}$')
+beta1, beta2 = fitGalaxies(lambdas, spectrumMean1, spectrumMean2, betaBegin, betaEnd, r'$H_{\beta}$')
+OIII1, OIII2 = fitGalaxies(lambdas, spectrumMean1, spectrumMean2, OIIIBegin, OIIIEnd, '[OIII]')
+OI1, OI2 = fitGalaxies(lambdas, spectrumMean1, spectrumMean2, OIBegin, OIEnd, '[OI]')
+NII1, NII2 = fitGalaxies(lambdas, spectrumMean1, spectrumMean2, NIIBegin, NIIEnd, '[NII]')
+SII11, SII12 = fitGalaxies(lambdas, spectrumMean1, spectrumMean2, SII1Begin, SII1End, '[SII]' + r'$\lambda 6718 A$')
+SII21, SII22 = fitGalaxies(lambdas, spectrumMean1, spectrumMean2, SII2Begin, SII2End, '[SII]' + r'$\lambda 6733 A$')
 
-result_beta2 = gaussian_model.fit(Hbeta2, x = HbetaLambda, cont = initialCont, A = (np.max(Hbeta2) - initialCont), sigma = initialSigma, x0 = lambdas[int(betaBegin / 2 + betaEnd / 2)])
-beta2Cont = result_beta2.params['cont'].value
-beta2A = result_beta2.params['A'].value
-beta2Sigma = result_beta2.params['sigma'].value
-beta2X0= result_beta2.params['x0'].value
-print(result_beta2.fit_report())
+print(np.log(OIII1 / beta1) / np.log(10), np.log(NII1 / alpha1)/ np.log(10))
+print(np.log(OIII2 / beta2) / np.log(10), np.log(NII2 / alpha2) / np.log(10))
 
-fig, axes = plt.subplots(2, 2)
+print(np.log(OIII1 / beta1) / np.log(10), np.log((SII11 + SII21) / alpha1) / np.log(10))
+print(np.log(OIII2 / beta2) / np.log(10), np.log((SII12 + SII22) / alpha2) / np.log(10))
 
-alphaX = np.linspace(lambdas[alphaBegin], lambdas[alphaEnd], 100)
-betaX = np.linspace(lambdas[betaBegin], lambdas[betaEnd], 100)
-
-axes[0, 0].plot(HalphaLambda, Halpha1, label = 'H' + r'$_{\alpha}$' + ' galaxy 1')
-axes[0, 0].plot(alphaX, gaussian(alphaX, alpha1Cont, alpha1A, alpha1Sigma, alpha1X0), 'k--', label = 'best fit')
-axes[0, 0].set_xlabel(r'$\lambda, A$')
-axes[0, 0].set_ylabel('Intensity')
-axes[0, 0].grid()
-axes[0, 0].legend()
-
-axes[1, 0].plot(HalphaLambda, Halpha2, label = 'H' + r'$_{\alpha}$' + ' galaxy 2')
-axes[1, 0].plot(alphaX, gaussian(alphaX, alpha2Cont, alpha2A, alpha2Sigma, alpha2X0), 'k--', label = 'best fit')
-axes[1, 0].set_xlabel(r'$\lambda, A$')
-axes[1, 0].set_ylabel('Intensity')
-axes[1, 0].grid()
-axes[1, 0].legend()
-
-axes[0, 1].plot(HbetaLambda, Hbeta1, label = 'H' + r'$_{\beta}$' + ' galaxy 1')
-axes[0, 1].plot(betaX, gaussian(betaX, beta1Cont, beta1A, beta1Sigma, beta1X0), 'k--', label = 'best fit')
-axes[0, 1].set_xlabel(r'$\lambda, A$')
-axes[0, 1].set_ylabel('Intensity')
-axes[0, 1].grid()
-axes[0, 1].legend()
-
-axes[1, 1].plot(HbetaLambda, Hbeta2, label = 'H' + r'$_{\beta}$' + ' galaxy 2')
-axes[1, 1].plot(betaX, gaussian(betaX, beta2Cont, beta2A, beta2Sigma, beta2X0), 'k--', label = 'best fit')
-axes[1, 1].set_xlabel(r'$\lambda, A$')
-axes[1, 1].set_ylabel('Intensity')
-axes[1, 1].grid()
-axes[1, 1].legend()
-
-plt.show()
+print(np.log(OIII1 / beta1) / np.log(10), np.log(OI1 / alpha1) / np.log(10))
+print(np.log(OIII2 / beta2) / np.log(10), np.log(OI2 / alpha2) / np.log(10))
 
 # хи-квадрат для 4 линий - Halpha, Hbeta, OIII x2
 alphaBegin = 730
@@ -230,6 +221,8 @@ DOF = len(cutSpectrum1)
 # вычисление хи2
 chi2_1 = np.sum((cutSpectrum2 - cutSpectrum1)**2 / (cutErr1**2))
 print(chi2_1, chi2_1 / DOF, DOF)
+
+# BPT диаграмма
 
 
 
