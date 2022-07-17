@@ -1,114 +1,228 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.lines as lines
+import scipy.signal as sig
 from lmfit import Model
 
-def gaussian2D(x, A, x0, y0, sigmaX, sigmaY, angle):
-	X = x[:, 0]
-	Y = x[:, 1]
-	
+def gaussian2D(x, y, A, x0, y0, sigmaX, sigmaY, angle):
 	angle = np.pi / 180. * angle
-	
 	a = 0.5 * (np.cos(angle) / sigmaX)**2 + 0.5 * (np.sin(angle) / sigmaY)**2
 	b = 0.5 * (np.sin(2 * angle) / sigmaX**2 - np.sin(2 * angle) / sigmaY**2)
 	c = 0.5 * (np.sin(angle) / sigmaX)**2 + 0.5 * (np.cos(angle) / sigmaY)**2
-	
-	result = A * np.exp(- a * (X - x0)**2 - b * (Y - y0) * (X - x0) - c * (Y - y0)**2)
+	result = A * np.exp(- a * (x - x0)**2 - b * (y - y0) * (x - x0) - c * (y - y0)**2)
 	return result
 	
-def makeImage(field, imageParams, lensParams, rotation):
-	A, x0, y0, sigmaX, sigmaY, angle, scale = imageParams
-	X, Y = field
-	dimX = len(X)
-	dimY = len(Y)
-	meshX, meshY = np.meshgrid(X, Y)
-	x = np.zeros((dimX * dimY, 2),)
-	x[:, 0] = meshX.flatten()
-	x[:, 1] = meshY.flatten()
+def ellipse2D(x, y, A, x0, y0, majorAxis, minorAxis, angle):
+	angle = np.pi / 180. * angle
+	a = (np.cos(angle) / majorAxis)**2 + (np.sin(angle) / minorAxis)**2
+	b = (np.sin(2 * angle) / majorAxis**2 - np.sin(2 * angle) / minorAxis**2)
+	c = (np.sin(angle) / majorAxis)**2 + (np.cos(angle) / minorAxis)**2
+	if(a * (x - x0)**2 + b * (y - y0) * (x - x0) + c * (y - y0)**2 > 1):
+		result = 0
+	else:
+		result = A
+	return result
 	
-	galaxy = gaussian2D(x, A, x0, y0, sigmaX, sigmaY, angle)
+def obj(x, y, A, x0, y0, majorAxis, minorAxis, angle, typeOfImage):
+	result = 0
+	if (typeOfImage == 'gaussian'):
+		result = gaussian2D(x, y, A, x0, y0, majorAxis, minorAxis, angle)
+	if (typeOfImage == 'ellipse'):
+		result = ellipse2D(x, y, A, x0, y0, majorAxis, minorAxis, angle)
+	return result
 	
-	#check original image
-	galaxy2D = galaxy.reshape(dimX, dimY)
-	
+def makePSF(sigma, pixelizationParams):
+	scale1, scale2 = pixelizationParams
+	sigma = sigma / scale1
+	# PSF 5 sigma
+	boundary = int(5 * sigma) * 2 + 1
+	result = np.zeros((boundary, boundary),)
+	for index1 in range(boundary):
+		for index2 in range(boundary):
+			A = 1.
+			result[index1, index2] = gaussian2D(index1, index2, A, (boundary - 1) / 2, (boundary - 1) / 2, sigma, sigma, 0)
+	norm = np.sum(result)
+	result = result / norm
+	return result
+		
+def makeImage(frameParams, originalParams, lensParams, rotation, shift, pixelizationParams, PSF, graphing):
+	#unpacking parameters
+	dimX, dimY = frameParams
+	A, x0, y0, sigmaX, sigmaY, angle, typeOfImage = originalParams
 	tension, inclination, Rs = lensParams
+	shiftX, sgiftY = shift
+	rotation = rotation * np.pi / 180.
+	# scale1 - for the raw image (arcsec/pix). Lensing procedure is described in arcsec
+	# scale2 - for the minimization functional (arcsec/pix).
+	scale1, scale2 = pixelizationParams
+	
+	# coordinate grid
+	X = np.linspace(-(dimX - 1) / 2, (dimX - 1) / 2, dimX)
+	Y = np.linspace(-(dimY - 1) / 2, (dimY - 1) / 2, dimY)
+	image = np.zeros((dimX, dimY),)
+	
 	inclination = inclination * np.pi / 180.
-	theta = 8 * np.pi * tension * np.cos(inclination) * 206265. / scale # pixel
-	lensedGalaxy = np.zeros((dimX, dimY),)
-	for indexY in range(dimY):
-		RsY = Rs / (1. + np.tan(inclination) * np.sin((Y[indexY] - dimY / 2) * scale / 206265.))
-		Re = theta * (1 - RsY) #Einstein distance
-		
-		Xextended = np.linspace(-int(Re) - 1, dimX + int(Re), dimX + 2*(int(Re) + 2))
-		Ypart = [Y[indexY]]
-		
-		meshX, meshY = np.meshgrid(Xextended, Ypart)
-		cutLeft = 0
-		cutRight = 0
-		while(Xextended[cutLeft] < dimX / 2 + Re):
-			cutLeft += 1
-		while(Xextended[cutRight] < dimX / 2 - Re):
-			cutRight += 1
-		
-		
-		xLine = np.zeros((len(Xextended), 2),)
-		xLine[:, 0] = meshX.flatten()
-		xLine[:, 1] = meshY.flatten()
+	theta = 8 * np.pi * tension * 206265. / scale1 # pixel
 	
-		galaxyLeft = gaussian2D(xLine, A, x0 - Re/2, y0, sigmaX, sigmaY, angle).reshape(len(Xextended), 1)[:, 0]
-		galaxyRight = gaussian2D(xLine, A, x0 + Re/2, y0, sigmaX, sigmaY, angle).reshape(len(Xextended), 1)[:, 0]
-		for indexX in range(len(Xextended)):
-			if (indexX > cutLeft):
-				galaxyLeft[indexX] = 0
-			if (indexX < cutRight):
-				galaxyRight[indexX] = 0
+	for indexX in range(dimX):
+		for indexY in range(dimY):
+			# reverse shift
+			x1 = X[indexX] - shiftX
+			y1 = Y[indexY] - shiftY
+			# reverse rotation
+			x2 = x1 * np.cos(rotation) + y1 * np.sin(rotation)
+			y2 = -x1 * np.sin(rotation) + y1 * np.cos(rotation)
+			
+			RsY = Rs / (1. + np.tan(inclination) * np.sin(x2 * scale1 / 206265.))
+			Re = theta * (1 - RsY) * (np.cos(inclination) + np.sin(inclination) * x2 * scale1 / 206265. ) #Einstein distance in pixels
+			
+			if(np.abs(y2) <= Re):
+				image[indexX, indexY] = obj(x2, y2 - Re / 2, A, x0, y0, sigmaX, sigmaY, angle, typeOfImage) + obj(x2, y2 + Re / 2, A, x0, y0, sigmaX, sigmaY, angle, typeOfImage)
+			if(y2 < - Re):
+				image[indexX, indexY] = obj(x2, y2 + Re / 2, A, x0, y0, sigmaX, sigmaY, angle, typeOfImage)
+			if(y2 > Re):
+				image[indexX, indexY] = obj(x2, y2 - Re / 2, A, x0, y0, sigmaX, sigmaY, angle, typeOfImage)
+	
+	imageConvolved = sig.convolve2d(image, PSF, mode = 'same', boundary = 'fill')
 				
-		finalRow = galaxyLeft[0:dimX] + galaxyRight[len(Xextended) - dimX - 1: len(Xextended) - 1]
-		lensedGalaxy[indexY, :] = finalRow
-	
-	theta1 = theta * (1 - Rs / (1. - np.tan(inclination) * np.sin( dimY / 2. * scale / 206265.)))
-	theta2 = theta * (1 - Rs / (1. + np.tan(inclination) * np.sin( dimY / 2. * scale / 206265.)))
-	fig, (ax1, ax2) = plt.subplots(1, 2)
-	
-	ax1.plot([dimX/2, dimX/2], [0, dimY], color = 'white', linewidth = 1) #string
-	ax1.plot([dimX/2 + theta1, dimX/2 + theta2], [0, dimY], color = 'white', linewidth = 1) 
-	ax1.plot([dimX/2 - theta1, dimX/2 - theta2], [0, dimY], color = 'white', linewidth = 1)
-	
-	ax1.imshow(galaxy2D)
-	ax1.set_title('original image')
-	
-	ax2.plot([dimX/2, dimX/2], [0, dimY], color = 'white', linewidth = 1) #string
-	ax2.plot([dimX/2 + theta1, dimX/2 + theta2], [0, dimY], color = 'white', linewidth = 1) 
-	ax2.plot([dimX/2 - theta1, dimX/2 - theta2], [0, dimY], color = 'white', linewidth = 1)
-	
-	ax2.imshow(lensedGalaxy)
-	ax2.set_title('lensed image')
-	ax2.set_xlabel(r'$G\mu = 1.37 \cdot 10^{-2}$' + '\n' + r'$i = 89.9958^\circ$')
-	plt.show()
+	# drawing stuff
+	if(graphing == 1):
+		originalImage = np.zeros((dimX, dimY),)
 		
+		# original image
+		for indexX in range(dimX):
+			for indexY in range(dimY):
+				# reverse shift
+				x1 = X[indexX] - shiftX
+				y1 = Y[indexY] - shiftY
+				# reverse rotation
+				x2 = x1 * np.cos(rotation) + y1 * np.sin(rotation)
+				y2 = -x1 * np.sin(rotation) + y1 * np.cos(rotation)
+				originalImage[indexX, indexY] = obj(x2, y2, A, x0, y0, sigmaX, sigmaY, angle, typeOfImage)
+		
+		originalImageConvolved = sig.convolve2d(originalImage, PSF, mode = 'same', boundary = 'fill')
 		
 			
+		fig, (ax1, ax2) = plt.subplots(1, 2)
+		fig.set_size_inches(10,5)
+		
+		ax1.imshow(originalImageConvolved)
+		ax1.contour(originalImageConvolved, levels = 5, colors = 'w')
+		ax1.set_title('original image')
+		ax1.set_xlabel('Y')
+		ax1.set_ylabel('X')
+		
+		ax2.imshow(imageConvolved)
+		ax2.contour(imageConvolved, levels = 5, colors = 'w')
+		ax2.set_title('lensed image')
+		ax2.set_xlabel('Y')
+		ax2.set_ylabel('X')
+		
+		# scale
+		length = 1. / scale1 
+		
+		ax1.plot([dimX / 10, dimX / 10], [dimY / 10, dimY / 10 + length], 'b', label = '1 arcsec')
+		ax2.plot([dimX / 10, dimX / 10], [dimY / 10, dimY / 10 + length], 'b', label = '1 arcsec')
+		
+		# string position
+		string = np.zeros((dimX, 2))
+		string1 = np.zeros((dimX, 2))
+		string2 = np.zeros((dimX, 2))
+		
+		delCount0 = 0
+		delCount1 = 0
+		delCount2 = 0
+		for indexX in range(dimX):
+			for indexY in range(dimY):
+				# reverse shift
+				x1 = X[indexX] - shiftX
+				y1 = Y[indexY] - shiftY
+				# reverse rotation
+				x2 = x1 * np.cos(rotation) + y1 * np.sin(rotation)
+				y2 = -x1 * np.sin(rotation) + y1 * np.cos(rotation)
+				
+				RsY = Rs / (1. + np.tan(inclination) * x2 * scale1 / 206265.)
+				Re = theta * (1 - RsY) * (np.cos(inclination) + np.sin(inclination) * x2 * scale1 / 206265.)#Einstein distance in pixels
+				
+				if (np.abs(y2) <= 0.5):
+					string[indexX - delCount0, 0] = indexX
+					string[indexX - delCount0, 1] = indexY
+				if (np.abs(y2 - Re) <= 0.5):
+					string1[indexX - delCount1, 0] = indexX
+					string1[indexX - delCount1, 1] = indexY
+				if (np.abs(y2 + Re) <= 0.5):
+					string2[indexX - delCount2, 0] = indexX
+					string2[indexX - delCount2, 1] = indexY
+			if((string[indexX - delCount0, 0] <= 0) or (string[indexX - delCount0, 0] >= dimX - 1) or (string[indexX - delCount0, 1] <= 0) or (string[indexX - delCount0, 1] >= dimY - 1)):
+				delCount0 +=1
+			if((string1[indexX - delCount1, 0] <= 0) or (string1[indexX - delCount1, 0] >= dimX - 1) or (string1[indexX - delCount1, 1] <= 0) or (string1[indexX - delCount1, 1] >= dimY - 1)):
+				delCount1 +=1
+			if((string2[indexX - delCount2, 0] <= 0) or (string2[indexX - delCount2, 0] >= dimX - 1) or (string2[indexX - delCount2, 1] <= 0) or (string2[indexX - delCount2, 1] >= dimY - 1)):
+				delCount2 +=1
+		
+		ax2.plot(string[0:dimX - delCount0, 1], string[0:dimY - delCount0, 0], 'r', label = 'string')
+		ax2.plot(string1[0:dimX - delCount1, 1], string1[0:dimY - delCount1, 0], 'r--', label = 'string' + r'$\pm \theta_E/2$')
+		ax2.plot(string2[0:dimX - delCount2, 1], string2[0:dimY - delCount2, 0], 'r--')
+		
+		ax1.legend()
+		ax2.legend()
+		
+		plt.show()
+		
+		'''
+		fig.savefig('gif/' + '{0:03}'.format(i) + '.png')
+		plt.close(fig) 
+		print(i)
+		'''
+		
+			
+	return image
 	
+def getRealImage(filter, X1, X2, Y1, Y2):
+	image = 0
+	return image
 
-dimX = 3001
-dimY = 3001
-X = np.linspace(0, dimX - 1, dimX)	
-Y = np.linspace(0, dimY - 1, dimY)	
-scale = 0.004 #arcsec/pix
-field = X, Y
-A = 10.
-x0 = 2100.
-y0 = 1500.
-sigmaX = 100.
-sigmaY = 250.
-angle = 10.
-imageParams = A, x0, y0, sigmaX, sigmaY, angle, scale
+def makeResiduals(image, model):
+	return 0
+	
+dimX = 301
+dimY = 301
+frameParams = dimX, dimY
 
-tension = 1.7e-2 #Gmu
-inclination = 89.9965 #i in degrees
-Rs = 0.5 # Rs / Rd, relative distance
+A = 1.
+x0 = 0.
+y0 = 80.
+sigmaX = 25.
+sigmaY = 4.
+angle = -45.
+typeOfImage = 'gaussian'
+originalParams = A, x0, y0, sigmaX, sigmaY, angle, typeOfImage
+
+tension = 1e-2 #Gmu
+inclination = 89.995 #i in degrees
+Rs = 0.7 # Rs / Rd, relative distance
 lensParams = tension, inclination, Rs
 
-rotation = 0
+rotation = 0.
+shiftX = 0.
+shiftY = -50.
+shift = shiftX, shiftY
 
-makeImage(field, imageParams, lensParams, rotation)
+scale1 = 0.02 #arcsec/pix 
+scale2 = 1. #arcsec/pix
+pixelizationParams = scale1, scale2
+
+sigma = 0.3 #arcsec, PSF radius
+PSF = makePSF(sigma, pixelizationParams)
+graphing = 1
+
+lensedImage = makeImage(frameParams, originalParams, lensParams, rotation, shift, pixelizationParams, PSF, graphing)
+
+'''
+for i in range(20):
+	y0 = 100 - 10 * i
+	originalParams = A, x0, y0, sigmaX, sigmaY, angle, typeOfImage
+	lensedImage = makeImage(frameParams, originalParams, lensParams, rotation, shift, pixelizationParams, PSF, graphing, i)
+	#plt.imshow(lensedImage, vmin = 0, vmax = 20)
+	#plt.show()
+'''
