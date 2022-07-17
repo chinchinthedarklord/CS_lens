@@ -2,6 +2,7 @@
 # 07059 - первая галактика
 # 07060 - вторая галактика
 # 07061 - FeNe, калибровка по известной лампе.
+# ccaed12041_b - проверочный снимок
 # 07034,35,62,85,86 -  BIAS
 
 import numpy as np
@@ -99,7 +100,8 @@ def removeBackground(SHOT):
 	pixels2 = np.linspace(dim2 - offset + 1 - offsetP * 2, dim2 - offsetP * 2, offset)
 	pixels = np.concatenate((pixels1, pixels2))
 	
-	spectrum = np.zeros((dim1),)
+	spectrum1 = np.zeros((dim1),)
+	spectrum2 = np.zeros((dim1),)
 	err = np.zeros((dim1),)
 	lineA, lineB, width = getLine()
 	
@@ -115,33 +117,41 @@ def removeBackground(SHOT):
 		SHOT[index1, :] = SHOT[index1, :] - quadratic(pixelsFull, A, B, C)
 		
 		flatField = line - quadratic(pixels, A, B, C)
-		err[index1] = np.std(flatField) * np.sqrt(width)
+		err[index1] = np.std(flatField) * np.sqrt(width / 2)
 		
 		beginLine = int(linear(index1, lineA, lineB)) - offsetP
 		endLine = int(beginLine + width)
-		spectrum[index1] = np.sum(SHOT[index1, beginLine : endLine])
+		meanLine = int(0.5 * (beginLine + endLine))
+		spectrum1[index1] = np.sum(SHOT[index1, beginLine : meanLine + 1])
+		spectrum2[index1] = np.sum(SHOT[index1, meanLine : endLine])
 		
-		'''
+	
 		# отмечаем расположение нужной линии
 		marker = 150
 		SHOT[index1, beginLine] = marker
-		SHOT[index1, endLine] = marker		
-		'''
+		SHOT[index1, endLine] = marker	
+		SHOT[index1, meanLine] = marker	
 		
-	#скользящее среднее, чтобы убирать шумы
-	'''
-	binning_spectrum = 10	
-	pd_spectrum = pd.DataFrame(spectrum)
-	rolling_spectrum = pd_spectrum.rolling(binning_spectrum, min_periods=1)
-	spectrum = rolling_spectrum.mean().to_numpy()[:, 0]
+		
+	#скользящее среднее, чтобы убирать шумы и не превышать разрешение спектрографа (ненужная информация)
 	
-	binning_err = 20
+	binning_spectrum = 3
+		
+	pd_spectrum1 = pd.DataFrame(spectrum1)
+	rolling_spectrum1 = pd_spectrum1.rolling(binning_spectrum, min_periods=1)
+	spectrum1 = rolling_spectrum1.mean().to_numpy()[:, 0]
+		
+	pd_spectrum2 = pd.DataFrame(spectrum2)
+	rolling_spectrum2 = pd_spectrum2.rolling(binning_spectrum, min_periods=1)
+	spectrum = rolling_spectrum2.mean().to_numpy()[:, 0]
+	
+	binning_err = 3
 	pd_err = pd.DataFrame(err)
 	rolling_err = pd_err.rolling(binning_err, min_periods=1)
 	err = rolling_err.mean().to_numpy()[:, 0]
-	'''
 	
-	return SHOT, spectrum, err
+	
+	return SHOT, spectrum1, spectrum2, err
 	
 # надо попробовать использовать плоское поле и кривизну с известного снимака лампы, чтобы убрать атмосферные линии. Но это будет очень сложно
 
@@ -334,7 +344,10 @@ def cleanLines(obj, BIAS, graphing):
 	pixels2 = np.linspace(dim2 - offset + 1 - offsetP * 2, dim2 - offsetP * 2, offset) - dim2 / 2
 	maskPixelsY = np.concatenate((pixels1, pixels2))
 	
-	line_positions = np.array([57, 185, 216, 245, 255, 270, 283, 294, 305, 317, 332, 366, 375, 448, 469, 524, 555, 581, 592, 606, 617, 629, 641, 653, 666, 692, 812, 840, 870, 878, 897, 905, 920, 931, 941, 953, 978, 995, 1012, 1034, 1047, 1066, 1100, 1092, 1127, 1166, 1192, 1214, 1224, 1234, 1270, 1306, 1336, 1365, 1389, 1398, 1411, 1420, 1430, 1441, 1461, 1487, 1788, 1814, 2250, 2064, 2885]) #заполнить линии!!!
+	
+	line_positions = np.array([57, 185, 216, 245, 255, 270, 283, 294, 305, 317, 332, 366, 375, 469, 524, 555, 581, 592, 606, 617, 629, 641, 653, 666, 692, 840, 870, 878, 897, 920, 941, 953, 978, 995, 1012, 1034, 1066, 1100, 1092, 1127, 1192, 1214, 1224, 1234, 1270, 1306, 1336, 1365, 1411, 1420, 1430, 1441, 1461, 1487, 1788, 1814, 2250, 2064, 2885]) 
+	# 448, 812, 905, 931, 1047, 1166, 1389, 1398
+	
 	width = 10
 	sky_model = np.zeros((dim1, dim2 - 2 * offsetP),)
 	
@@ -398,13 +411,13 @@ def cleanLines(obj, BIAS, graphing):
 			axes[1].imshow(SHOT[int(line_positions[i]) - width: int(line_positions[i]) + width, :], vmin = 0, vmax = vmax)
 			axes[2].imshow(SHOT[int(line_positions[i]) - width: int(line_positions[i]) + width, :] - best_line, vmin = -vmax, vmax = vmax)
 			plt.show()
-		print(str(i + 1) + ' / ' + str(len(line_positions)))
+		print(str(i + 1) + ' / ' + str(len(line_positions)) + ', done successfully ' + str(line_positions[i]))
 		SHOT[int(line_positions[i]) - width: int(line_positions[i]) + width, :] -= best_line + cont
 			
 	# собираем итоговый спектр из того, что осталось посередине
-	SHOT, spectrum, err = removeBackground(SHOT)
+	SHOT, spectrum1, spectrum2, err = removeBackground(SHOT)
 	
-	return SHOT, spectrum, err
+	return SHOT, spectrum1, spectrum2, err
 	
 # калибровка по спектру неона
 def getCalibration(graphing):
@@ -428,7 +441,7 @@ def getCalibration(graphing):
 	return lambdas, A, B
 
 BIAS = getBIAS()
-lambdas, A, B = getCalibration(graphing = 1)
+lambdas, A, B = getCalibration(graphing = 0)
 
 #--------------------------------------
 '''
@@ -437,50 +450,109 @@ plt.imshow(SHOT, vmin = -10, vmax = 30)
 plt.show()
 '''
 #--------------------------------------
-
+'''
 galaxy1 = removeCosmics('afc07059', BIAS)
-cleanSHOT1, galaxySpectrum1, err1 = cleanLines('afc07059', BIAS, graphing = 1)
+cleanSHOT1, galaxySpectrum1_1, galaxySpectrum1_2, err1 = cleanLines('afc07059', BIAS, graphing = 1)
 
 galaxy2 = removeCosmics('afc07060', BIAS)
-cleanSHOT2, galaxySpectrum2, err2 = cleanLines('afc07060', BIAS, graphing = 0)
+cleanSHOT2, galaxySpectrum2_1, galaxySpectrum2_2, err2 = cleanLines('afc07060', BIAS, graphing = 0)
 
 # показать очищенные 2D-спектры
 fig, (ax1, ax2) = plt.subplots(1, 2)
 ax1.imshow(cleanSHOT1, vmin = -10, vmax = 30)
 ax2.imshow(cleanSHOT2, vmin = -10, vmax = 30)
 plt.show()
-
+ 
 #показать готовые 1D-спектры
-fig, (ax1, ax2, ax3) = plt.subplots(3, 1)
+#галактик две, складываем потоки и ошибки
+galaxySpectrum1 = galaxySpectrum1_1 + galaxySpectrum2_1
+galaxySpectrum2 = galaxySpectrum1_2 + galaxySpectrum2_2
+galaxyErr1 = np.sqrt(err1**2 + err2**2)
+galaxyErr2 = galaxyErr1
 
-ax1.fill_between(lambdas, y1 = galaxySpectrum1 - err1, y2 = galaxySpectrum1 + err1, alpha = 0.4)
-ax1.plot(lambdas, galaxySpectrum1, label = 'afc07059')
-ax2.fill_between(lambdas, y1 = galaxySpectrum2 - err2, y2 = galaxySpectrum2 + err2, alpha = 0.4)
-ax2.plot(lambdas, galaxySpectrum2, label = 'afc07060')
+binning_spectrum = 10 
+pd_spectrum1 = pd.DataFrame(galaxySpectrum1)
+rolling_spectrum1 = pd_spectrum1.rolling(binning_spectrum, min_periods=1)
+galaxySpectrum1mean = rolling_spectrum1.mean().to_numpy()[:, 0]
+		
+pd_spectrum2 = pd.DataFrame(galaxySpectrum2)
+rolling_spectrum2 = pd_spectrum2.rolling(binning_spectrum, min_periods=1)
+galaxySpectrum2mean = rolling_spectrum2.mean().to_numpy()[:, 0]
 
-ax3.plot(lambdas, galaxySpectrum2 - galaxySpectrum1)
+fig, (ax1, ax2) = plt.subplots(2, 1)
+
+ax1.fill_between(lambdas, y1 = galaxySpectrum1 - galaxyErr1, y2 = galaxySpectrum1 + galaxyErr1, alpha = 0.4)
+ax1.plot(lambdas, galaxySpectrum1, label = 'galaxy 1')
+ax1.plot(lambdas, galaxySpectrum1mean, 'r', label = 'rolling mean')
+ax2.fill_between(lambdas, y1 = galaxySpectrum2 - galaxyErr2, y2 = galaxySpectrum2 + galaxyErr2, alpha = 0.4)
+ax2.plot(lambdas, galaxySpectrum2, label = 'galaxy 2')
+ax2.plot(lambdas, galaxySpectrum2mean, 'r', label = 'rolling mean')
+ 
+ax1.grid()
+ax2.grid()
+
+ax1.legend() 
+ax2.legend()
+ 
+ax1.set_title('1D spectra')
+ax1.set_ylabel('Intensity')
+ax2.set_ylabel('Intensity')
+ax2.set_xlabel(r'$\lambda, A$')
+
+plt.show()
+'''
+ 
+#проверочный снимок
+frame_test = removeCosmics('ccaed12041_b', 0)
+cleanSHOT_test, galaxySpectrumTest_1, galaxySpectrumTest_2, errTest = cleanLines('ccaed12041_b', 0, graphing = 0)
+
+# дополнительная красивая кривая сглаженного спектра
+binning_spectrum = 10
+		
+pd_spectrum1 = pd.DataFrame(galaxySpectrumTest_1)
+rolling_spectrum1 = pd_spectrum1.rolling(binning_spectrum, min_periods=1)
+galaxySpectrumTest_1mean = rolling_spectrum1.mean().to_numpy()[:, 0]
+		
+pd_spectrum2 = pd.DataFrame(galaxySpectrumTest_2)
+rolling_spectrum2 = pd_spectrum2.rolling(binning_spectrum, min_periods=1)
+galaxySpectrumTest_2mean = rolling_spectrum2.mean().to_numpy()[:, 0]
+
+
+# рисуем
+plt.imshow(cleanSHOT_test, vmin = -10, vmax = 30)
+plt.show()
+
+fig, (ax1, ax2) = plt.subplots(2, 1)
+
+ax1.fill_between(lambdas, y1 = galaxySpectrumTest_1 - errTest, y2 = galaxySpectrumTest_1 + errTest, alpha = 0.4)
+ax1.plot(lambdas, galaxySpectrumTest_1, label = 'galaxy 1')
+ax1.plot(lambdas, galaxySpectrumTest_1mean, 'r', label = 'rolling mean')
+ax2.fill_between(lambdas, y1 = galaxySpectrumTest_2 - errTest, y2 = galaxySpectrumTest_2 + errTest, alpha = 0.4)
+ax2.plot(lambdas, galaxySpectrumTest_2, label = 'galaxy 2')
+ax2.plot(lambdas, galaxySpectrumTest_2mean, 'r', label = 'rolling mean')
 
 ax1.grid()
 ax2.grid()
-ax3.grid()
 
-ax1.legend()
+ax1.legend() 
 ax2.legend()
 
 ax1.set_title('1D spectra')
 ax1.set_ylabel('Intensity')
 ax2.set_ylabel('Intensity')
-ax3.set_xlabel(r'$\lambda, A$')
+ax2.set_xlabel(r'$\lambda, A$')
 
 plt.show()
 
-file_spectrum1 = open('afc07059spectrum.dat', 'w')
+
+
+file_spectrum1 = open('spectrum1_additional.dat', 'w')
 for i in range(len(lambdas)):
-	file_spectrum1.write(str(lambdas[i]) + '\t' + str(galaxySpectrum1[i]) + '\t' + str(err1[i]) + '\n')
+	file_spectrum1.write(str(lambdas[i]) + '\t' + str(galaxySpectrum1[i]) + '\t' + str(galaxyErr1[i]) + '\n')
 file_spectrum1.close()
 
-file_spectrum2 = open('afc07060spectrum.dat', 'w')
+file_spectrum2 = open('spectrum2_additional.dat', 'w')
 for i in range(len(lambdas)):
-	file_spectrum2.write(str(lambdas[i]) + '\t' + str(galaxySpectrum2[i]) + '\t' + str(err2[i]) + '\n')
+	file_spectrum2.write(str(lambdas[i]) + '\t' + str(galaxySpectrum2[i]) + '\t' + str(galaxyErr2[i]) + '\n')
 file_spectrum2.close()
 
