@@ -2,7 +2,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.lines as lines
 import scipy.signal as sig
+from astropy.io import fits
+from scipy.optimize import minimize
 from lmfit import Model
+import time
 
 def gaussian2D(x, y, A, x0, y0, sigmaX, sigmaY, angle):
 	angle = np.pi / 180. * angle
@@ -45,12 +48,12 @@ def makePSF(sigma, pixelizationParams):
 	result = result / norm
 	return result
 		
-def makeImage(frameParams, originalParams, lensParams, rotation, shift, pixelizationParams, PSF, graphing):
+def makeImage(frameParams, originalParams, lensParams, rotation, shift, pixelizationParams, PSF, graphing, realImage):
 	#unpacking parameters
 	dimX, dimY = frameParams
 	A, x0, y0, sigmaX, sigmaY, angle, typeOfImage = originalParams
 	tension, inclination, Rs = lensParams
-	shiftX, sgiftY = shift
+	shiftX, shiftY = shift
 	rotation = rotation * np.pi / 180.
 	# scale1 - for the raw image (arcsec/pix). Lensing procedure is described in arcsec
 	# scale2 - for the minimization functional (arcsec/pix).
@@ -84,6 +87,16 @@ def makeImage(frameParams, originalParams, lensParams, rotation, shift, pixeliza
 				image[indexX, indexY] = obj(x2, y2 - Re / 2, A, x0, y0, sigmaX, sigmaY, angle, typeOfImage)
 	
 	imageConvolved = sig.convolve2d(image, PSF, mode = 'same', boundary = 'fill')
+	
+	# pixelizated galaxy
+	dimX1 = int(dimX / scale2)
+	dimY1 = int(dimY / scale2)
+	pixelizatedImage = np.zeros((dimX1, dimY1),)
+	for indexX in range(dimX1):
+		for indexY in range(dimY1):
+			pixelizatedImage[indexX, indexY] = np.sum(imageConvolved[scale2 * indexX : scale2 * (indexX + 1), scale2 * indexY : scale2 * (indexY + 1)])
+	
+	residuals = realImage - pixelizatedImage
 				
 	# drawing stuff
 	if(graphing == 1):
@@ -103,26 +116,50 @@ def makeImage(frameParams, originalParams, lensParams, rotation, shift, pixeliza
 		originalImageConvolved = sig.convolve2d(originalImage, PSF, mode = 'same', boundary = 'fill')
 		
 			
-		fig, (ax1, ax2) = plt.subplots(1, 2)
-		fig.set_size_inches(10,5)
+		fig, ax = plt.subplots(2, 3)
+		fig.set_size_inches(12,8)
 		
-		ax1.imshow(originalImageConvolved)
-		ax1.contour(originalImageConvolved, levels = 5, colors = 'w')
-		ax1.set_title('original image')
-		ax1.set_xlabel('Y')
-		ax1.set_ylabel('X')
+		ax[0, 0].imshow(originalImageConvolved)
+		ax[0, 0].contour(originalImageConvolved, levels = 3, colors = 'w')
+		ax[0, 0].set_title('original image')
+		ax[0, 0].set_xlabel('Y')
+		ax[0, 0].set_ylabel('X')
 		
-		ax2.imshow(imageConvolved)
-		ax2.contour(imageConvolved, levels = 5, colors = 'w')
-		ax2.set_title('lensed image')
-		ax2.set_xlabel('Y')
-		ax2.set_ylabel('X')
+		ax[1, 0].imshow(imageConvolved)
+		ax[1, 0].contour(imageConvolved, levels = 3, colors = 'w')
+		ax[1, 0].set_title('lensed image')
+		ax[1, 0].set_xlabel('Y')
+		ax[1, 0].set_ylabel('X')
+		
+		ax[0, 1].imshow(pixelizatedImage)
+		ax[0, 1].contour(pixelizatedImage, levels = 3, colors = 'w')
+		ax[0, 1].set_title('lensed pixelized image')
+		ax[0, 1].set_xlabel('Y')
+		ax[0, 1].set_ylabel('X')
+		
+		ax[1, 1].imshow(realImage)
+		ax[1, 1].set_title('real image')
+		ax[1, 1].set_xlabel('Y')
+		ax[1, 1].set_ylabel('X')
+		
+		ax[0, 2].imshow(realImage)
+		ax[0, 2].contour(pixelizatedImage, levels = 3, colors = 'w')
+		ax[0, 2].set_title('real image + contours')
+		ax[0, 2].set_xlabel('Y')
+		ax[0, 2].set_ylabel('X')
+		
+		ax[1, 2].imshow(residuals)
+		#ax[1, 2].contour(residuals, levels = 2, colors = 'w')
+		ax[1, 2].set_title('residuals')
+		ax[1, 2].set_xlabel('Y')
+		ax[1, 2].set_ylabel('X')
+		
 		
 		# scale
 		length = 1. / scale1 
 		
-		ax1.plot([dimX / 10, dimX / 10], [dimY / 10, dimY / 10 + length], 'b', label = '1 arcsec')
-		ax2.plot([dimX / 10, dimX / 10], [dimY / 10, dimY / 10 + length], 'b', label = '1 arcsec')
+		ax[0, 0].plot([dimX / 10, dimX / 10], [dimY / 10, dimY / 10 + length], 'b', label = '1 arcsec')
+		ax[1, 0].plot([dimX / 10, dimX / 10], [dimY / 10, dimY / 10 + length], 'b', label = '1 arcsec')
 		
 		# string position
 		string = np.zeros((dimX, 2))
@@ -160,12 +197,12 @@ def makeImage(frameParams, originalParams, lensParams, rotation, shift, pixeliza
 			if((string2[indexX - delCount2, 0] <= 0) or (string2[indexX - delCount2, 0] >= dimX - 1) or (string2[indexX - delCount2, 1] <= 0) or (string2[indexX - delCount2, 1] >= dimY - 1)):
 				delCount2 +=1
 		
-		ax2.plot(string[0:dimX - delCount0, 1], string[0:dimY - delCount0, 0], 'r', label = 'string')
-		ax2.plot(string1[0:dimX - delCount1, 1], string1[0:dimY - delCount1, 0], 'r--', label = 'string' + r'$\pm \theta_E/2$')
-		ax2.plot(string2[0:dimX - delCount2, 1], string2[0:dimY - delCount2, 0], 'r--')
+		ax[1, 0].plot(string[0:dimX - delCount0, 1], string[0:dimY - delCount0, 0], 'r', label = 'string')
+		ax[1, 0].plot(string1[0:dimX - delCount1, 1], string1[0:dimY - delCount1, 0], 'r--', label = 'string' + r'$\pm \theta_E/2$')
+		ax[1, 0].plot(string2[0:dimX - delCount2, 1], string2[0:dimY - delCount2, 0], 'r--')
 		
-		ax1.legend()
-		ax2.legend()
+		ax[0, 0].legend()
+		ax[1, 0].legend()
 		
 		plt.show()
 		
@@ -173,56 +210,162 @@ def makeImage(frameParams, originalParams, lensParams, rotation, shift, pixeliza
 		fig.savefig('gif/' + '{0:03}'.format(i) + '.png')
 		plt.close(fig) 
 		print(i)
-		'''
-		
+		'''	
 			
+	return pixelizatedImage, residuals
+	
+def getRealImage(filter):
+	hdul = fits.open('image_fitting/galaxy/' + filter + '.fits')
+	image = hdul[1].data
+	hdul.close()
 	return image
 	
-def getRealImage(filter, X1, X2, Y1, Y2):
-	image = 0
-	return image
+def getSigmaImage(filter):
+	image = getRealImage(filter)
+	dimX = len(image[:, 0])
+	dimY = len(image[0, :])	
+	
+	# from header of original image
+	# gain is approx 1
+	nOfFrames = 30
+	texp = 45
+	
+	imageCounts = nOfFrames * texp * image
+	mean = np.std(imageCounts[:, 0:10])**2
+	imageCounts = imageCounts + mean
+	
+	sigma = np.zeros((dimX, dimY),)
+	for indexX in range(dimX):
+		for indexY in range(dimY):
+			if (imageCounts[indexX, indexY] > 0):
+				sigma[indexX, indexY] = np.sqrt(imageCounts[indexX, indexY]) / (nOfFrames * texp)
+			if (imageCounts[indexX, indexY] < 0):
+				sigma[indexX, indexY] = np.sqrt(mean) / (nOfFrames * texp)
+	return sigma
 
-def makeResiduals(image, model):
-	return 0
+filter = 'i'
+image = getRealImage(filter)
+sigmaImage = getSigmaImage(filter)
+
+def likehood(params):
+	t_init = time.time()
 	
-dimX = 301
-dimY = 301
+	A = params[0]
+	x0 = params[1]
+	y0 = params[2]
+	sigmaX = params[3]
+	sigmaY = params[4]
+	angle = params[5]
+	tension = 5e-2#8e-7 #Gmu
+	inclination = 89.9995 #i in degrees
+	Rs = params[6] # Rs / Rd, relative distance
+	rotation = params[7]
+	shiftX = params[8]
+	shiftY = params[9]
+
+	#initial guess
+	'''
+	A = 0.5
+	x0 = 30.
+	y0 = 20.
+	sigmaX = 12.
+	sigmaY = 6.
+	angle = -5.
+	tension = 5e-2#8e-7 #Gmu
+	inclination = 89.9995 #i in degrees
+	Rs = 0.25 # Rs / Rd, relative distance
+	rotation = 60.
+	shiftX = 8.
+	shiftY = -27.
+	'''
+
+	filter = 'i'
+	graphing = 0
+	
+	dimX = 300
+	dimY = 300
+	offset = 25
+	frameParams = dimX, dimY
+	
+	typeOfImage = 'gaussian'
+	originalParams = A, x0, y0, sigmaX, sigmaY, angle, typeOfImage
+	lensParams = tension, inclination, Rs
+
+	shift = shiftX, shiftY
+	transformationParams = shiftX, shiftY, rotation
+
+	scale1 = 0.258 / 3. #arcsec/pix 
+	scale2 = 3 #pix/pix
+	pixelizationParams = scale1, scale2
+
+	sigma = 2. * scale2 * scale1 #arcsec, PSF radius
+	PSF = makePSF(sigma, pixelizationParams)
+	
+	lensedImage, residuals = makeImage(frameParams, originalParams, lensParams, rotation, shift, pixelizationParams, PSF, graphing, image)
+	
+	chi2 = np.sum(residuals[offset - 1: dimX - offset, offset - 1: dimX - offset]**2 / sigmaImage[offset - 1: dimX - offset, offset - 1: dimY - offset]**2) / (dimX - 2 * offset) / (dimY - 2 * offset)
+	
+	t_final = time.time()
+	print('eval. time = ' + "{:.2f}".format(t_final - t_init) + ', chi2 = ' + "{:.6f}".format(chi2))
+	
+	return chi2
+
+
+
+#initial guess
+A = 0.5
+x0 = 30.
+y0 = 20.
+sigmaX = 12.
+sigmaY = 6.
+angle = -5.
+tension = 5e-2#8e-7 #Gmu
+inclination = 89.9995 #i in degrees
+Rs = 0.25 # Rs / Rd, relative distance
+rotation = 60.
+shiftX = 8.
+shiftY = -27.
+
+init = [0.5, 30, 20, 12, 6, -5, 0.25, 60, 8, -27]
+res = minimize(likehood, init)
+print('minimization successful')
+params = res.x
+A = params[0]
+x0 = params[1]
+y0 = params[2]
+sigmaX = params[3]
+sigmaY = params[4]
+angle = params[5]
+tension = 5e-2#8e-7 #Gmu
+inclination = 89.9995 #i in degrees
+Rs = params[6] # Rs / Rd, relative distance
+rotation = params[7]
+shiftX = params[8]
+shiftY = params[9]
+
+print(params)
+
+graphing = 1
+	
+dimX = 300
+dimY = 300
+offset = 25
 frameParams = dimX, dimY
-
-A = 1.
-x0 = 0.
-y0 = 80.
-sigmaX = 25.
-sigmaY = 4.
-angle = -45.
+	
 typeOfImage = 'gaussian'
 originalParams = A, x0, y0, sigmaX, sigmaY, angle, typeOfImage
-
-tension = 1e-2 #Gmu
-inclination = 89.995 #i in degrees
-Rs = 0.7 # Rs / Rd, relative distance
 lensParams = tension, inclination, Rs
 
-rotation = 0.
-shiftX = 0.
-shiftY = -50.
 shift = shiftX, shiftY
+transformationParams = shiftX, shiftY, rotation
 
-scale1 = 0.02 #arcsec/pix 
-scale2 = 1. #arcsec/pix
+scale1 = 0.258 / 3. #arcsec/pix 
+scale2 = 3 #pix/pix
 pixelizationParams = scale1, scale2
 
-sigma = 0.3 #arcsec, PSF radius
+sigma = 2. * scale2 * scale1 #arcsec, PSF radius
 PSF = makePSF(sigma, pixelizationParams)
-graphing = 1
 
-lensedImage = makeImage(frameParams, originalParams, lensParams, rotation, shift, pixelizationParams, PSF, graphing)
+lensedImage, residuals = makeImage(frameParams, originalParams, lensParams, rotation, shift, pixelizationParams, PSF, graphing, image)
 
-'''
-for i in range(20):
-	y0 = 100 - 10 * i
-	originalParams = A, x0, y0, sigmaX, sigmaY, angle, typeOfImage
-	lensedImage = makeImage(frameParams, originalParams, lensParams, rotation, shift, pixelizationParams, PSF, graphing, i)
-	#plt.imshow(lensedImage, vmin = 0, vmax = 20)
-	#plt.show()
-'''
+
